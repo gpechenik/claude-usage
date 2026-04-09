@@ -6,11 +6,20 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 from scanner import get_db, init_db, upsert_sessions, insert_turns
-from dashboard import get_dashboard_data, DashboardHandler, HTML_TEMPLATE
+from dashboard import (
+    CHART_JS_PATH,
+    DashboardHandler,
+    HTML_TEMPLATE,
+    create_server,
+    get_dashboard_data,
+    get_session_detail,
+    validate_host,
+)
 
 try:
     from http.server import HTTPServer
@@ -91,6 +100,14 @@ class TestGetDashboardData(unittest.TestCase):
         # 1 hour = 60 minutes
         self.assertEqual(session["duration_min"], 60.0)
 
+    def test_session_detail_includes_tools_and_cwds(self):
+        detail = get_session_detail("sess-abc123", db_path=self.db_path)
+        self.assertEqual(detail["project"], "user/myproject")
+        self.assertEqual(detail["branch"], "main")
+        self.assertEqual(detail["tool_usage"][0]["tool_name"], "reply")
+        self.assertEqual(detail["cwd_usage"][0]["cwd"], "/tmp")
+        self.assertEqual(len(detail["turn_history"]), 1)
+
 
 class TestDashboardHTTP(unittest.TestCase):
     """Integration test: start server and make HTTP requests."""
@@ -106,6 +123,7 @@ class TestDashboardHTTP(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def test_index_returns_html(self):
         url = f"http://127.0.0.1:{self.port}/"
@@ -133,6 +151,12 @@ class TestDashboardHTTP(unittest.TestCase):
             self.assertIn("updated", data)
             self.assertIn("skipped", data)
 
+    def test_vendor_chart_js_served_locally(self):
+        url = f"http://127.0.0.1:{self.port}/vendor/chart.umd.min.js"
+        with urllib.request.urlopen(url) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/javascript", resp.headers["Content-Type"])
+
     def test_404_for_unknown_path(self):
         url = f"http://127.0.0.1:{self.port}/nonexistent"
         try:
@@ -140,6 +164,7 @@ class TestDashboardHTTP(unittest.TestCase):
             self.fail("Expected 404")
         except urllib.error.HTTPError as e:
             self.assertEqual(e.code, 404)
+            e.close()
 
 
 class TestHTMLTemplate(unittest.TestCase):
@@ -152,7 +177,8 @@ class TestHTMLTemplate(unittest.TestCase):
         self.assertIn("function esc(", HTML_TEMPLATE)
 
     def test_template_has_chart_js(self):
-        self.assertIn("chart.js", HTML_TEMPLATE.lower())
+        self.assertIn('/vendor/chart.umd.min.js', HTML_TEMPLATE)
+        self.assertNotIn('cdn.jsdelivr.net', HTML_TEMPLATE)
 
     def test_template_has_substring_matching(self):
         """Verify getPricing falls back to substring match for unknown models."""
@@ -198,6 +224,46 @@ class TestPricingParity(unittest.TestCase):
                 CLI_PRICING[model]["output"], js_prices[model]["output"],
                 msg=f"{model} output price mismatch"
             )
+
+
+class TestHostValidation(unittest.TestCase):
+    def test_loopback_hosts_allowed(self):
+        validate_host("127.0.0.1")
+        validate_host("localhost")
+        validate_host("::1")
+
+    def test_remote_hosts_rejected_by_default(self):
+        with self.assertRaises(ValueError):
+            validate_host("0.0.0.0")
+
+    def test_remote_hosts_allowed_with_opt_in(self):
+        old = os.environ.get("ALLOW_REMOTE")
+        os.environ["ALLOW_REMOTE"] = "1"
+        try:
+            validate_host("0.0.0.0")
+        finally:
+            if old is None:
+                os.environ.pop("ALLOW_REMOTE", None)
+            else:
+                os.environ["ALLOW_REMOTE"] = old
+
+    def test_create_server_uses_dynamic_port_by_default(self):
+        old = os.environ.pop("PORT", None)
+        try:
+            server = create_server(host="127.0.0.1")
+            try:
+                self.assertNotEqual(server.server_address[1], 0)
+            finally:
+                server.server_close()
+        finally:
+            if old is not None:
+                os.environ["PORT"] = old
+
+
+class TestBundledAssets(unittest.TestCase):
+    def test_chart_js_bundle_exists(self):
+        self.assertTrue(CHART_JS_PATH.exists())
+        self.assertGreater(CHART_JS_PATH.stat().st_size, 100_000)
 
 
 if __name__ == "__main__":

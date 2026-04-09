@@ -15,6 +15,11 @@ DB_PATH = Path.home() / ".claude" / "usage.db"
 DEFAULT_PROJECTS_DIRS = [PROJECTS_DIR, XCODE_PROJECTS_DIR]
 
 
+def count_lines(filepath):
+    with open(filepath, encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+
 def get_db(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

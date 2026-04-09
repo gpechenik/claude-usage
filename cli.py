@@ -5,12 +5,16 @@ Commands:
   scan      - Scan JSONL files and update the database
   today     - Print today's usage summary
   stats     - Print all-time usage statistics
-  dashboard - Scan + open browser + start dashboard server
+  dashboard - Scan + start dashboard server at a local URL
 """
 
 import os
+import shutil
+import subprocess
 import sys
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from datetime import datetime, date
 
@@ -72,6 +76,110 @@ def require_db():
         print("Database not found. Run: python cli.py scan")
         sys.exit(1)
     return sqlite3.connect(DB_PATH)
+
+
+def get_dashboard_host():
+    return os.environ.get("HOST", "127.0.0.1")
+
+
+def get_dashboard_port():
+    return int(os.environ["PORT"]) if "PORT" in os.environ else 0
+
+
+def copy_to_clipboard(text):
+    clipboard_commands = [
+        ["pbcopy"],
+        ["wl-copy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+        ["clip"],
+    ]
+    for command in clipboard_commands:
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            subprocess.run(command, input=text, text=True, check=True)
+            return command[0]
+        except Exception:
+            continue
+    return None
+
+
+def read_single_key():
+    if not sys.stdin.isatty():
+        return None
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+            ch = msvcrt.getwch()
+            return "\n" if ch == "\r" else ch
+        except Exception:
+            return None
+
+    try:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            return sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        return None
+
+
+def build_prompt_line(spinner_frame=None):
+    prompt = "Press Enter to open in your default browser, or Esc/Ctrl+C to abort."
+    if spinner_frame is None:
+        return prompt
+    status = f"\033[1;36mBeaming usage data {spinner_frame}\033[0m"
+    return f"{prompt}  {status}"
+
+
+def prompt_for_browser(url, open_browser=None):
+    print()
+    print(f"Dashboard URL: {url}")
+    copied_by = copy_to_clipboard(url)
+    if copied_by:
+        print(f"Copied to clipboard via {copied_by}.")
+    else:
+        print("Clipboard copy unavailable on this system.")
+
+    if not sys.stdin.isatty():
+        print("Open that URL manually. Press Ctrl+C to stop the server.")
+        return
+
+    stop_spinner = threading.Event()
+
+    def spinner():
+        frames = "|/-\\"
+        idx = 0
+        while not stop_spinner.is_set():
+            sys.stdout.write("\r" + build_prompt_line(frames[idx % len(frames)]))
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.12)
+        sys.stdout.write("\r" + build_prompt_line() + " " * 24)
+        sys.stdout.flush()
+
+    spinner_thread = threading.Thread(target=spinner, daemon=True)
+    spinner_thread.start()
+    try:
+        while True:
+            ch = read_single_key()
+            if ch in ("\n", "\r"):
+                if open_browser is not None:
+                    open_browser(url)
+            if ch in ("\x1b", "\x03"):
+                raise KeyboardInterrupt
+    finally:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.5)
+        sys.stdout.write("\r" + build_prompt_line() + "\n")
+        sys.stdout.flush()
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -263,24 +371,30 @@ def cmd_stats():
 def cmd_dashboard(projects_dir=None):
     import webbrowser
     import threading
-    import time
 
     print("Running scan first...")
     cmd_scan(projects_dir=projects_dir)
 
     print("\nStarting dashboard server...")
-    from dashboard import serve
+    from dashboard import create_server
 
-    host = os.environ.get("HOST", "localhost")
-    port = int(os.environ.get("PORT", "8080"))
+    host = get_dashboard_host()
+    port = get_dashboard_port()
+    server = create_server(host=host, port=port)
+    bound_host, bound_port = server.server_address[:2]
+    url = f"http://{bound_host}:{bound_port}"
 
-    def open_browser():
-        time.sleep(1.0)
-        webbrowser.open(f"http://{host}:{port}")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
-    t = threading.Thread(target=open_browser, daemon=True)
-    t.start()
-    serve(host=host, port=port)
+    try:
+        prompt_for_browser(url, open_browser=webbrowser.open)
+        thread.join()
+    except KeyboardInterrupt:
+        print("Aborted.")
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -289,10 +403,10 @@ USAGE = """
 Claude Code Usage Dashboard
 
 Usage:
-  python cli.py scan [--projects-dir PATH]   Scan JSONL files and update database
-  python cli.py today                        Show today's usage summary
-  python cli.py stats                        Show all-time statistics
-  python cli.py dashboard [--projects-dir PATH]  Scan + start dashboard
+  python cli.py scan [--projects-dir PATH]       Scan JSONL files and update database
+  python cli.py today                            Show today's usage summary
+  python cli.py stats                            Show all-time statistics
+  python cli.py dashboard [--projects-dir PATH]  Scan + start dashboard at a free local port
 """
 
 COMMANDS = {

@@ -1,7 +1,17 @@
 """Tests for cli.py - pricing, formatting, and cost calculation."""
 
+import os
 import unittest
-from cli import get_pricing, calc_cost, fmt, fmt_cost, PRICING
+from cli import (
+    PRICING,
+    build_prompt_line,
+    calc_cost,
+    fmt,
+    fmt_cost,
+    get_dashboard_host,
+    get_dashboard_port,
+    get_pricing,
+)
 
 
 class TestGetPricing(unittest.TestCase):
@@ -128,6 +138,45 @@ class TestFmtCost(unittest.TestCase):
         self.assertEqual(fmt_cost(3.0), "$3.0000")
         self.assertEqual(fmt_cost(0.0001), "$0.0001")
         self.assertEqual(fmt_cost(0), "$0.0000")
+
+
+class TestDashboardLaunchConfig(unittest.TestCase):
+    def test_prompt_line_includes_status_when_spinner_present(self):
+        line = build_prompt_line("|")
+        self.assertIn("Press Enter to open in your default browser", line)
+        self.assertIn("Beaming usage data", line)
+
+    def test_prompt_line_without_spinner_is_plain(self):
+        line = build_prompt_line()
+        self.assertIn("Press Enter to open in your default browser", line)
+        self.assertNotIn("Beaming usage data", line)
+
+    def test_default_host_is_loopback(self):
+        old = os.environ.pop("HOST", None)
+        try:
+            self.assertEqual(get_dashboard_host(), "127.0.0.1")
+        finally:
+            if old is not None:
+                os.environ["HOST"] = old
+
+    def test_default_port_is_dynamic(self):
+        old = os.environ.pop("PORT", None)
+        try:
+            self.assertEqual(get_dashboard_port(), 0)
+        finally:
+            if old is not None:
+                os.environ["PORT"] = old
+
+    def test_explicit_port_is_respected(self):
+        old = os.environ.get("PORT")
+        os.environ["PORT"] = "9000"
+        try:
+            self.assertEqual(get_dashboard_port(), 9000)
+        finally:
+            if old is None:
+                os.environ.pop("PORT", None)
+            else:
+                os.environ["PORT"] = old
 
 
 class TestPricingConsistency(unittest.TestCase):

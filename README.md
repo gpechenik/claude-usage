@@ -68,14 +68,20 @@ python cli.py today
 # Show all-time statistics (in terminal)
 python cli.py stats
 
-# Scan + open browser dashboard at http://localhost:8080
+# Scan + start dashboard at a free local port
 python cli.py dashboard
 
-# Custom host and port via environment variables
-HOST=0.0.0.0 PORT=9000 python cli.py dashboard
+# Pin a specific loopback bind and port if you want one
+HOST=127.0.0.1 PORT=9000 python cli.py dashboard
+
+# Deliberately expose remotely only if you really want to
+ALLOW_REMOTE=1 HOST=0.0.0.0 PORT=9000 python cli.py dashboard
 
 # Scan a custom projects directory
 python cli.py scan --projects-dir /path/to/transcripts
+
+# Scan a custom projects directory and launch the dashboard from it
+python cli.py dashboard --projects-dir /path/to/transcripts
 ```
 
 The scanner is incremental — it tracks each file's path and modification time, so re-running `scan` is fast and only processes new or changed files.
@@ -95,7 +101,15 @@ Claude Code writes one JSONL file per session to `~/.claude/projects/`. Each lin
 
 `scanner.py` parses those files and stores the data in a SQLite database at `~/.claude/usage.db`.
 
-`dashboard.py` serves a single-page dashboard on `localhost:8080` with Chart.js charts (loaded from CDN). It auto-refreshes every 30 seconds and supports model filtering with bookmarkable URLs. The bind address and port can be overridden with `HOST` and `PORT` environment variables (defaults: `localhost`, `8080`).
+`dashboard.py` serves a single-page dashboard on a local loopback address with Chart.js served locally from the repo, so the browser does not need to fetch chart code from a CDN. By default, if `PORT` is unset, it asks the OS for a free local port. It auto-refreshes every 30 seconds, supports model filtering with bookmarkable URLs, and includes session drill-down for branch, cwd, tools, and turn history.
+
+When you run `python cli.py dashboard`, the CLI now:
+- prints the dashboard URL
+- copies the URL to your clipboard when possible
+- lets you press `Enter` any time to open it in your default browser again
+- lets you hit `Esc` or `Ctrl+C` to abort instead of auto-opening a browser window
+
+By default, the dashboard refuses to bind to non-loopback hosts. If you really want remote access, set `ALLOW_REMOTE=1` explicitly.
 
 ---
 
@@ -122,3 +136,4 @@ Costs are calculated using **Anthropic API pricing as of April 2026** ([claude.c
 | `scanner.py` | Parses JSONL transcripts, writes to `~/.claude/usage.db` |
 | `dashboard.py` | HTTP server + single-page HTML/JS dashboard |
 | `cli.py` | `scan`, `today`, `stats`, `dashboard` commands |
+| `vendor/chart.umd.min.js` | Vendored Chart.js bundle served locally by the dashboard |
