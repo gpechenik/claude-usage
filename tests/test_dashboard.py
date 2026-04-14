@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from scanner import get_db, init_db, upsert_sessions, insert_turns
-from dashboard import get_dashboard_data, DashboardHandler, HTML_TEMPLATE
+from dashboard import get_dashboard_data, get_session_detail, DashboardHandler, HTML_TEMPLATE
 
 try:
     from http.server import HTTPServer
@@ -90,6 +90,14 @@ class TestGetDashboardData(unittest.TestCase):
         session = data["sessions_all"][0]
         # 1 hour = 60 minutes
         self.assertEqual(session["duration_min"], 60.0)
+
+    def test_session_detail_includes_tools_and_cwds(self):
+        detail = get_session_detail("sess-abc123", db_path=self.db_path)
+        self.assertEqual(detail["project"], "user/myproject")
+        self.assertEqual(detail["branch"], "main")
+        self.assertEqual(detail["tool_usage"][0]["tool_name"], "reply")
+        self.assertEqual(detail["cwd_usage"][0]["cwd"], "/tmp")
+        self.assertEqual(len(detail["turn_history"]), 1)
 
 
 class TestDashboardHTTP(unittest.TestCase):
